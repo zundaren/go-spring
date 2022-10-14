@@ -189,7 +189,7 @@ func (s *server) ErrorHandler() ErrorHandler {
 	return FuncErrorHandler(func(ctx Context, err *HttpError) {
 		defer func() {
 			if r := recover(); r != nil {
-				s.logger.WithContext(ctx.Context()).Error(log.ERROR, r)
+				s.logger.WithContext(ctx.Context()).Error(r)
 			}
 		}()
 		if err.Internal == nil {
@@ -248,12 +248,12 @@ func (s *server) prepare() error {
 
 	// 打印所有的路由信息
 	for _, m := range s.Mappers() {
-		s.logger.Infof("%v :%d %s -> %s:%d %s", func() []interface{} {
+		s.logger.Infof("%v :%d %s -> %s:%d %s", log.T(func() []interface{} {
 			method := GetMethod(m.method)
 			path := s.config.BasePath + m.path
 			file, line, fnName := m.handler.FileLine()
-			return log.T(method, s.config.Port, path, file, line, fnName)
-		})
+			return []interface{}{method, s.config.Port, path, file, line, fnName}
+		}))
 	}
 
 	return nil

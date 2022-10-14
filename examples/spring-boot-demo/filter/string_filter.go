@@ -42,7 +42,7 @@ func (f *StringFilter) Invoke(ctx web.Context, chain web.FilterChain) {
 	ctxLogger.Info("before ", f.Text)
 	f.Logger.Info(f.Text)
 
-	chain.Next(ctx)
+	chain.Next(ctx, web.Recursive)
 }
 
 type StatusResponseWriter struct {

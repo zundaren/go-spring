@@ -20,14 +20,15 @@
 package assert
 
 import (
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"regexp"
 	"strings"
+
+	"github.com/go-spring/spring-base/json"
 )
 
-// T is minimum interface of *testing.T.
+// T is the minimum interface of *testing.T.
 type T interface {
 	Helper()
 	Error(args ...interface{})
@@ -42,17 +43,21 @@ func fail(t T, str string, msg ...string) {
 // True assertion failed when got is false.
 func True(t T, got bool, msg ...string) {
 	t.Helper()
-	Bool(t, got).IsTrue(msg...)
+	if !got {
+		fail(t, "got false but expect true", msg...)
+	}
 }
 
 // False assertion failed when got is true.
 func False(t T, got bool, msg ...string) {
 	t.Helper()
-	Bool(t, got).IsFalse(msg...)
+	if got {
+		fail(t, "got true but expect false", msg...)
+	}
 }
 
-// IsNil reports v is nil, but will not panic.
-func IsNil(v reflect.Value) bool {
+// isNil reports v is nil, but will not panic.
+func isNil(v reflect.Value) bool {
 	switch v.Kind() {
 	case reflect.Chan,
 		reflect.Func,
@@ -69,11 +74,11 @@ func IsNil(v reflect.Value) bool {
 // Nil assertion failed when got is not nil.
 func Nil(t T, got interface{}, msg ...string) {
 	t.Helper()
-	// 为什么不能使用 got == nil 进行判断呢？因为如果
+	// Why can't we use got==nil to judge？Because if
 	// a := (*int)(nil)        // %T == *int
 	// b := (interface{})(nil) // %T == <nil>
-	// 那么 a==b 的结果是 false，因为二者类型不一致。
-	if !IsNil(reflect.ValueOf(got)) {
+	// then a==b is false, because they are different types.
+	if !isNil(reflect.ValueOf(got)) {
 		str := fmt.Sprintf("got (%T) %v but expect nil", got, got)
 		fail(t, str, msg...)
 	}
@@ -82,7 +87,7 @@ func Nil(t T, got interface{}, msg ...string) {
 // NotNil assertion failed when got is nil.
 func NotNil(t T, got interface{}, msg ...string) {
 	t.Helper()
-	if IsNil(reflect.ValueOf(got)) {
+	if isNil(reflect.ValueOf(got)) {
 		fail(t, "got nil but expect not nil", msg...)
 	}
 }
@@ -100,7 +105,7 @@ func Equal(t T, got interface{}, expect interface{}, msg ...string) {
 func NotEqual(t T, got interface{}, expect interface{}, msg ...string) {
 	t.Helper()
 	if reflect.DeepEqual(got, expect) {
-		str := fmt.Sprintf("expect not (%T) %v", expect, expect)
+		str := fmt.Sprintf("got (%T) %v but expect not (%T) %v", got, got, expect, expect)
 		fail(t, str, msg...)
 	}
 }
@@ -111,10 +116,12 @@ func JsonEqual(t T, got string, expect string, msg ...string) {
 	var gotJson interface{}
 	if err := json.Unmarshal([]byte(got), &gotJson); err != nil {
 		fail(t, err.Error(), msg...)
+		return
 	}
 	var expectJson interface{}
 	if err := json.Unmarshal([]byte(expect), &expectJson); err != nil {
 		fail(t, err.Error(), msg...)
+		return
 	}
 	if !reflect.DeepEqual(gotJson, expectJson) {
 		str := fmt.Sprintf("got (%T) %v but expect (%T) %v", got, got, expect, expect)
@@ -154,14 +161,7 @@ func Panic(t T, fn func(), expr string, msg ...string) {
 func recovery(fn func()) (str string) {
 	defer func() {
 		if r := recover(); r != nil {
-			switch v := r.(type) {
-			case error:
-				str = v.Error()
-			case string:
-				str = v
-			default:
-				str = fmt.Sprint(r)
-			}
+			str = fmt.Sprint(r)
 		}
 	}()
 	fn()
@@ -198,14 +198,12 @@ func matches(t T, got string, expr string, msg ...string) {
 func TypeOf(t T, got interface{}, expect interface{}, msg ...string) {
 	t.Helper()
 
+	e1 := reflect.TypeOf(got)
 	e2 := reflect.TypeOf(expect)
-	if e2.Kind() == reflect.Ptr {
-		if e2.Elem().Kind() == reflect.Interface {
-			e2 = e2.Elem()
-		}
+	if e2.Kind() == reflect.Ptr && e2.Elem().Kind() == reflect.Interface {
+		e2 = e2.Elem()
 	}
 
-	e1 := reflect.TypeOf(got)
 	if !e1.AssignableTo(e2) {
 		str := fmt.Sprintf("got type (%s) but expect type (%s)", e1, e2)
 		fail(t, str, msg...)
@@ -216,6 +214,7 @@ func TypeOf(t T, got interface{}, expect interface{}, msg ...string) {
 func Implements(t T, got interface{}, expect interface{}, msg ...string) {
 	t.Helper()
 
+	e1 := reflect.TypeOf(got)
 	e2 := reflect.TypeOf(expect)
 	if e2.Kind() == reflect.Ptr {
 		if e2.Elem().Kind() == reflect.Interface {
@@ -226,9 +225,71 @@ func Implements(t T, got interface{}, expect interface{}, msg ...string) {
 		}
 	}
 
-	e1 := reflect.TypeOf(got)
 	if !e1.Implements(e2) {
 		str := fmt.Sprintf("got type (%s) but expect type (%s)", e1, e2)
 		fail(t, str, msg...)
 	}
+}
+
+// InSlice assertion failed when got is not in expect array & slice.
+func InSlice(t T, got interface{}, expect interface{}, msg ...string) {
+	t.Helper()
+
+	switch v := reflect.ValueOf(expect); v.Kind() {
+	case reflect.Array, reflect.Slice:
+		for i := 0; i < v.Len(); i++ {
+			if reflect.DeepEqual(got, v.Index(i).Interface()) {
+				return
+			}
+		}
+	default:
+		str := fmt.Sprintf("unsupported expect value (%T) %v", expect, expect)
+		fail(t, str, msg...)
+		return
+	}
+
+	str := fmt.Sprintf("got (%T) %v is not in (%T) %v", got, got, expect, expect)
+	fail(t, str, msg...)
+}
+
+// InMapKeys assertion failed when got is not in keys of expect map.
+func InMapKeys(t T, got interface{}, expect interface{}, msg ...string) {
+	t.Helper()
+
+	switch v := reflect.ValueOf(expect); v.Kind() {
+	case reflect.Map:
+		for _, key := range v.MapKeys() {
+			if reflect.DeepEqual(got, key.Interface()) {
+				return
+			}
+		}
+	default:
+		str := fmt.Sprintf("unsupported expect value (%T) %v", expect, expect)
+		fail(t, str, msg...)
+		return
+	}
+
+	str := fmt.Sprintf("got (%T) %v is not in keys of (%T) %v", got, got, expect, expect)
+	fail(t, str, msg...)
+}
+
+// InMapValues assertion failed when got is not in values of expect map.
+func InMapValues(t T, got interface{}, expect interface{}, msg ...string) {
+	t.Helper()
+
+	switch v := reflect.ValueOf(expect); v.Kind() {
+	case reflect.Map:
+		for _, key := range v.MapKeys() {
+			if reflect.DeepEqual(got, v.MapIndex(key).Interface()) {
+				return
+			}
+		}
+	default:
+		str := fmt.Sprintf("unsupported expect value (%T) %v", expect, expect)
+		fail(t, str, msg...)
+		return
+	}
+
+	str := fmt.Sprintf("got (%T) %v is not in values of (%T) %v", got, got, expect, expect)
+	fail(t, str, msg...)
 }

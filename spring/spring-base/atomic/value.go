@@ -17,7 +17,6 @@
 package atomic
 
 import (
-	"encoding/json"
 	"sync/atomic"
 )
 
@@ -38,8 +37,5 @@ func (x *Value) SetMarshalJSON(fn MarshalValue) {
 
 // MarshalJSON returns the JSON encoding of x.
 func (x *Value) MarshalJSON() ([]byte, error) {
-	if x.marshalJSON != nil {
-		return x.marshalJSON(x.Load())
-	}
-	return json.Marshal(x.Load())
+	return x.marshalJSON(x.Load())
 }

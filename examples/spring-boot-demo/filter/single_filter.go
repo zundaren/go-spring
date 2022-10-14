@@ -42,5 +42,5 @@ func (f *SingleBeanFilter) Invoke(ctx web.Context, chain web.FilterChain) {
 		panic(fmt.Errorf("${default-value} expect 'app-test' but '%s'", f.DefaultValue))
 	}
 	f.Logger.WithContext(ctx.Context()).Info("::SingleBeanFilter")
-	chain.Next(ctx)
+	chain.Next(ctx, web.Recursive)
 }

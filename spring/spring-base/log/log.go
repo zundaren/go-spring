@@ -25,22 +25,16 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 
 	"github.com/go-spring/spring-base/atomic"
 )
 
-var (
-	// configLoggers 配置文件中的 Logger 对象，is safe for map[string]privateConfig.
-	configLoggers atomic.Value
+// configLoggers 配置文件中的 Logger 对象，is safe for map[string]privateConfig.
+var configLoggers atomic.Value
 
-	// usingLoggers 用户代码中的 Logger 对象，is safe for map[string]*Logger.
-	usingLoggers sync.Map
-
-	// Status records events that occur in the logging system.
-	Status = newLogger("", ErrorLevel)
-)
+// usingLoggers 用户代码中的 Logger 对象，is safe for map[string]*Logger.
+var usingLoggers sync.Map
 
 type Initializer interface {
 	Init() error
@@ -51,25 +45,13 @@ type LifeCycle interface {
 	Stop(ctx context.Context)
 }
 
-// T 将可变参数转换成切片形式。
-func T(a ...interface{}) []interface{} {
-	return a
-}
-
 type privateConfigMap struct {
 	loggers map[string]privateConfig
 }
 
 func (m *privateConfigMap) Get(name string) privateConfig {
-	for {
-		if v, ok := m.loggers[name]; ok {
-			return v
-		}
-		i := strings.LastIndexByte(name, '/')
-		if i < 0 {
-			break
-		}
-		name = name[:i]
+	if v, ok := m.loggers[name]; ok {
+		return v
 	}
 	return m.loggers["<<ROOT>>"]
 }
@@ -88,31 +70,26 @@ func (h *simLoggerHolder) Get() *Logger {
 
 type initLoggerHolder struct {
 	name   string
-	level  []Level
 	once   sync.Once
 	logger *Logger
 }
 
 func (h *initLoggerHolder) Get() *Logger {
 	h.once.Do(func() {
-		if len(h.level) == 0 {
-			h.level = append(h.level, InfoLevel)
-		}
-		h.logger = newLogger(h.name, h.level[0])
+		h.logger = newLogger(h.name)
 		m := configLoggers.Load().(*privateConfigMap)
 		h.logger.reconfigure(m.Get(h.name))
 	})
 	return h.logger
 }
 
-func GetLogger(name string, level ...Level) *Logger {
+func GetLogger(name string) *Logger {
 
 	if configLoggers.Load() == nil {
-		Status.WithSkip(1).Sugar().Fatal("should call refresh first")
-		os.Exit(-1)
+		panic(errors.New("should call refresh first"))
 	}
 
-	var h loggerHolder = &initLoggerHolder{name: name, level: level}
+	var h loggerHolder = &initLoggerHolder{name: name}
 	actual, loaded := usingLoggers.LoadOrStore(name, h)
 	if loaded {
 		return actual.(loggerHolder).Get()
@@ -234,7 +211,7 @@ func RefreshReader(input io.Reader, ext string) error {
 		}
 
 		if name != cRoot.getName() {
-			base.parent = cRoot
+			base.root = cRoot
 		}
 
 		for _, r := range base.AppenderRefs {
@@ -243,17 +220,6 @@ func RefreshReader(input io.Reader, ext string) error {
 				return fmt.Errorf("appender %s not found", r.Ref)
 			}
 			r.appender = appender
-		}
-
-		for {
-			n := strings.LastIndex(name, "/")
-			if n < 0 {
-				break
-			}
-			name = name[:n]
-			if parent, ok := cLoggers[name]; ok {
-				base.parent = parent
-			}
 		}
 	}
 
@@ -268,150 +234,4 @@ func RefreshReader(input io.Reader, ext string) error {
 	})
 
 	return nil
-}
-
-type Logger struct {
-	value atomic.Value
-	name  string
-	level Level
-	sugar *SugarLogger
-}
-
-// wrapperConfig atomic.Value 要求底层数据完全一致。
-type wrapperConfig struct {
-	config privateConfig
-}
-
-func newLogger(name string, level Level) *Logger {
-	l := &Logger{
-		name:  name,
-		level: level,
-	}
-	l.sugar = &SugarLogger{
-		l: l,
-	}
-	return l
-}
-
-// Name returns the logger's name.
-func (l *Logger) Name() string {
-	return l.name
-}
-
-func (l *Logger) config() privateConfig {
-	return l.value.Load().(*wrapperConfig).config
-}
-
-func (l *Logger) reconfigure(config privateConfig) {
-	l.value.Store(&wrapperConfig{config})
-}
-
-func (l *Logger) Level() Level {
-	return l.config().getLevel()
-}
-
-func (l *Logger) Filter() Filter {
-	return l.config().getFilter()
-}
-
-func (l *Logger) Appenders() []Appender {
-	c := l.config()
-	var appenders []Appender
-	for _, ref := range c.getAppenders() {
-		appenders = append(appenders, ref.appender)
-	}
-	return appenders
-}
-
-// WithSkip 创建包含 skip 信息的 Entry 。
-func (l *Logger) WithSkip(n int) SimpleEntry {
-	return SimpleEntry{pub: l.config(), skip: n}
-}
-
-// WithTag 创建包含 tag 信息的 Entry 。
-func (l *Logger) WithTag(tag string) SimpleEntry {
-	return SimpleEntry{pub: l.config(), tag: tag}
-}
-
-// WithContext 创建包含 context.Context 对象的 Entry 。
-func (l *Logger) WithContext(ctx context.Context) ContextEntry {
-	return ContextEntry{pub: l.config(), ctx: ctx}
-}
-
-func (l *Logger) enableLog(level Level) (privateConfig, bool) {
-	c := l.config()
-	s := c.getName()
-	if len(s) != len(l.name) || s != l.name {
-		if level < l.level {
-			return c, false
-		}
-	}
-	return c, true
-}
-
-func (l *Logger) Sugar() *SugarLogger {
-	return l.sugar
-}
-
-// Tracew outputs log with level TraceLevel.
-func (l *Logger) Tracew(fields ...Field) *Event {
-	c, ok := l.enableLog(TraceLevel)
-	if !ok {
-		return nil
-	}
-	return c.getEntry().WithSkip(1).Tracew(fields...)
-}
-
-// Debugw outputs log with level DebugLevel.
-func (l *Logger) Debugw(fields ...Field) *Event {
-	c, ok := l.enableLog(DebugLevel)
-	if !ok {
-		return nil
-	}
-	return c.getEntry().WithSkip(1).Debugw(fields...)
-}
-
-// Infow outputs log with level InfoLevel.
-func (l *Logger) Infow(fields ...Field) *Event {
-	c, ok := l.enableLog(InfoLevel)
-	if !ok {
-		return nil
-	}
-	return c.getEntry().WithSkip(1).Infow(fields...)
-}
-
-// Warnw outputs log with level WarnLevel.
-func (l *Logger) Warnw(fields ...Field) *Event {
-	c, ok := l.enableLog(WarnLevel)
-	if !ok {
-		return nil
-	}
-	return c.getEntry().WithSkip(1).Warnw(fields...)
-}
-
-// Errorw outputs log with level ErrorLevel.
-func (l *Logger) Errorw(fields ...Field) *Event {
-	c, ok := l.enableLog(ErrorLevel)
-	if !ok {
-		return nil
-	}
-	return c.getEntry().WithSkip(1).Errorw(fields...)
-}
-
-// Panicw outputs log with level PanicLevel.
-func (l *Logger) Panicw(fields ...Field) *Event {
-	c, ok := l.enableLog(PanicLevel)
-	if !ok {
-		return nil
-	}
-	return c.getEntry().WithSkip(1).Panicw(fields...)
-}
-
-// Fatalw outputs log with level FatalLevel.
-func (l *Logger) Fatalw(fields ...Field) *Event {
-	c, ok := l.enableLog(FatalLevel)
-	if !ok {
-		return nil
-	}
-	return c.getEntry().WithSkip(1).Fatalw(fields...)
 }

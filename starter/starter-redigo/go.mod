@@ -3,9 +3,9 @@ module github.com/go-spring/starter-redigo
 go 1.14
 
 require (
-	github.com/go-spring/spring-base v1.1.2
-	github.com/go-spring/spring-core v1.1.2
-	github.com/go-spring/spring-redigo v1.1.2
+	github.com/go-spring/spring-base v1.1.3
+	github.com/go-spring/spring-core v1.1.3
+	github.com/go-spring/spring-redigo v1.1.3
 )
 
 //replace (

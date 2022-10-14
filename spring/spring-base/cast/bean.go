@@ -25,30 +25,20 @@ var (
 	JSON = &jsonEncoding{}
 )
 
-type Encoding interface {
-	Convert(src interface{}, dest interface{}) error
-}
+type fastEncoding struct{}
 
-func ToBean(src interface{}, dest interface{}, enc ...Encoding) error {
-	var e Encoding
-	if len(enc) == 0 {
-		e = JSON
-	} else {
-		e = enc[0]
-	}
-	return e.Convert(src, dest)
-}
-
-type fastEncoding struct {
+type ConversionArg struct {
 	DeepCopy bool
 }
 
-func (e *fastEncoding) Convert(src interface{}, dest interface{}) error {
+// Convert converts src to dest using fast encoding.
+func (e *fastEncoding) Convert(src interface{}, dest interface{}, arg ...ConversionArg) error {
 	return nil
 }
 
 type jsonEncoding struct{}
 
+// Convert converts src to dest using json encoding.
 func (e *jsonEncoding) Convert(src interface{}, dest interface{}) error {
 	b, err := json.Marshal(src)
 	if err != nil {
