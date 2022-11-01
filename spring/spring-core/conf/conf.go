@@ -25,7 +25,6 @@ import (
 	"io/ioutil"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strings"
 	"time"
 
@@ -59,13 +58,8 @@ func init() {
 	// time format defined after >> splitter, otherwise it uses a default
 	// time format `2006-01-02 15:04:05 -0700`.
 	RegisterConverter(func(s string) (time.Time, error) {
-		s = strings.TrimSpace(s)
-		format := "2006-01-02 15:04:05 -0700"
-		if ss := strings.Split(s, ">>"); len(ss) == 2 {
-			format = strings.TrimSpace(ss[1])
-			s = strings.TrimSpace(ss[0])
-		}
-		return cast.ToTimeE(s, format)
+		const format = "2006-01-02 15:04:05 UTC"
+		return cast.ToTimeE(strings.TrimSpace(s), format)
 	})
 
 	// converts string into time.Duration. The string should have its own
@@ -87,12 +81,17 @@ func RegisterSplitter(name string, fn Splitter) {
 	splitters[name] = fn
 }
 
+// RemoveSplitter removes a Splitter by its name, only for unit testing.
+func RemoveSplitter(name string) {
+	delete(splitters, name)
+}
+
 // RegisterConverter registers its converter for non-primitive type such as
 // time.Time, time.Duration, or other user-defined value type.
 func RegisterConverter(fn util.Converter) {
 	t := reflect.TypeOf(fn)
 	if !util.IsConverter(t) {
-		panic(errors.New("converter should be func(string)(type,error)"))
+		panic(errors.New("converter is func(string)(type,error)"))
 	}
 	converters[t.Out(0)] = fn
 }
@@ -121,19 +120,10 @@ func New() *Properties {
 }
 
 // Map creates *Properties from map.
-func Map(m map[string]interface{}) (*Properties, error) {
+func Map(m map[string]interface{}) *Properties {
 	p := New()
-	var keys []string
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		if err := p.Set(k, m[k]); err != nil {
-			return nil, err
-		}
-	}
-	return p, nil
+	_ = p.Merge(m)
+	return p
 }
 
 // Load creates *Properties from file.
@@ -156,11 +146,20 @@ func (p *Properties) Load(file string) error {
 
 // Read creates *Properties from io.Reader, ext is the file name extension.
 func Read(r io.Reader, ext string) (*Properties, error) {
-	b, err := ioutil.ReadAll(r)
-	if err != nil {
+	p := New()
+	if err := p.Read(r, ext); err != nil {
 		return nil, err
 	}
-	return Bytes(b, ext)
+	return p, nil
+}
+
+// Read creates *Properties from io.Reader, ext is the file name extension.
+func (p *Properties) Read(r io.Reader, ext string) error {
+	b, err := ioutil.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	return p.Bytes(b, ext)
 }
 
 // Bytes creates *Properties from []byte, ext is the file name extension.
@@ -182,17 +181,26 @@ func (p *Properties) Bytes(b []byte, ext string) error {
 	if err != nil {
 		return err
 	}
-	var keys []string
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		if err = p.Set(k, m[k]); err != nil {
+	return p.Merge(m)
+}
+
+// Merge flattens the map and sets all keys and values.
+func (p *Properties) Merge(m map[string]interface{}) error {
+	s := Flatten(m)
+	return p.merge(s)
+}
+
+func (p *Properties) merge(m map[string]string) error {
+	for key, val := range m {
+		if err := p.store(key, val); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (p *Properties) store(key, val string) error {
+	return p.storage.Set(key, val)
 }
 
 func (p *Properties) Copy() *Properties {
@@ -237,40 +245,6 @@ func (p *Properties) Get(key string, opts ...GetOption) string {
 	return arg.def
 }
 
-func Flatten(key string, val interface{}, result map[string]string) error {
-	switch v := reflect.ValueOf(val); v.Kind() {
-	case reflect.Map:
-		if v.Len() == 0 {
-			result[key] = ""
-			return nil
-		}
-		for _, k := range v.MapKeys() {
-			mapKey := cast.ToString(k.Interface())
-			mapValue := v.MapIndex(k).Interface()
-			err := Flatten(key+"."+mapKey, mapValue, result)
-			if err != nil {
-				return err
-			}
-		}
-	case reflect.Array, reflect.Slice:
-		if v.Len() == 0 {
-			result[key] = ""
-			return nil
-		}
-		for i := 0; i < v.Len(); i++ {
-			subKey := fmt.Sprintf("%s[%d]", key, i)
-			subValue := v.Index(i).Interface()
-			err := Flatten(subKey, subValue, result)
-			if err != nil {
-				return err
-			}
-		}
-	default:
-		result[key] = cast.ToString(val)
-	}
-	return nil
-}
-
 // Set sets key's value to be a primitive type as int or string,
 // or a slice or map nested with primitive type elements. One thing
 // you should know is Set actions as overlap but not replace, that
@@ -282,22 +256,8 @@ func (p *Properties) Set(key string, val interface{}) error {
 		return nil
 	}
 	m := make(map[string]string)
-	err := Flatten(key, val, m)
-	if err != nil {
-		return err
-	}
-	var keys []string
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		err = p.storage.Set(k, m[k])
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	flatten(key, val, m)
+	return p.merge(m)
 }
 
 // Resolve resolves string value that contains references to other

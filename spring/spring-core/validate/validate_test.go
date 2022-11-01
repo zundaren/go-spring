@@ -14,23 +14,36 @@
  * limitations under the License.
  */
 
-package web_test
+package validate_test
 
 import (
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/go-spring/spring-base/assert"
-	"github.com/go-spring/spring-core/web"
+	"github.com/go-spring/spring-core/validate"
 )
 
-func TestRedirectFilter(t *testing.T) {
-	r, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1:8080/", nil)
-	w := httptest.NewRecorder()
-	ctx := web.NewBaseContext("", nil, r, &web.SimpleResponse{ResponseWriter: w})
-	f := web.HTTPSRedirect(web.NewRedirectConfig())
-	web.NewFilterChain([]web.Filter{f}).Next(ctx, web.Recursive)
-	assert.Equal(t, w.Result().StatusCode, http.StatusMovedPermanently)
-	assert.Equal(t, w.Result().Header.Get(web.HeaderLocation), "https://127.0.0.1:8080")
+func TestTagName(t *testing.T) {
+	assert.Equal(t, validate.TagName(), "expr")
+}
+
+func TestStruct(t *testing.T) {
+	var s struct {
+		E string `expr:"len($)>3"`
+	}
+	err := validate.Struct(&s)
+	assert.Nil(t, err)
+}
+
+func TestField(t *testing.T) {
+	i := 2
+	err := validate.Field(i, "")
+	assert.Nil(t, err)
+	err = validate.Field(i, "len($)==5")
+	assert.Error(t, err, "returns error")
+	err = validate.Field(i, "$>=3")
+	assert.Error(t, err, "validate failed on \"\\$>=3\" for value 2")
+	i = 5
+	err = validate.Field(i, "$>=3")
+	assert.Nil(t, err)
 }

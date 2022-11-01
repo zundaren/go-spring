@@ -42,24 +42,37 @@ type ParsedTag struct {
 	Splitter string // splitter's name
 }
 
+func (tag ParsedTag) String() string {
+	var sb strings.Builder
+	sb.WriteString("${")
+	sb.WriteString(tag.Key)
+	if tag.HasDef {
+		sb.WriteString(":=")
+		sb.WriteString(tag.Def)
+	}
+	sb.WriteString("}")
+	if tag.Splitter != "" {
+		sb.WriteString("||")
+		sb.WriteString(tag.Splitter)
+	}
+	return sb.String()
+}
+
 // ParseTag parses a value tag, returns its key, and default value, and splitter.
 func ParseTag(tag string) (ret ParsedTag, err error) {
 	i := strings.LastIndex(tag, "||")
 	if i == 0 {
-		err = errInvalidSyntax
-		err = util.Wrapf(err, code.FileLine(), "parse tag %q error", tag)
+		err = fmt.Errorf("parse tag '%s' error: %w", tag, errInvalidSyntax)
 		return
 	}
 	j := strings.LastIndex(tag, "}")
 	if j <= 0 {
-		err = errInvalidSyntax
-		err = util.Wrapf(err, code.FileLine(), "parse tag %q error", tag)
+		err = fmt.Errorf("parse tag '%s' error: %w", tag, errInvalidSyntax)
 		return
 	}
 	k := strings.Index(tag, "${")
 	if k < 0 {
-		err = errInvalidSyntax
-		err = util.Wrapf(err, code.FileLine(), "parse tag %q error", tag)
+		err = fmt.Errorf("parse tag '%s' error: %w", tag, errInvalidSyntax)
 		return
 	}
 	if i > j {
@@ -114,11 +127,11 @@ func BindValue(p *Properties, v reflect.Value, t reflect.Type, param BindParam, 
 	switch v.Kind() {
 	case reflect.Map:
 		return bindMap(p, v, t, param, filter)
+	case reflect.Slice:
+		return bindSlice(p, v, t, param, filter)
 	case reflect.Array:
 		err := errors.New("use slice instead of array")
 		return util.Wrapf(err, code.FileLine(), "bind %s error", param.Path)
-	case reflect.Slice:
-		return bindSlice(p, v, t, param, filter)
 	}
 
 	fn := converters[t]
@@ -179,9 +192,6 @@ func BindValue(p *Properties, v reflect.Value, t reflect.Type, param BindParam, 
 	case reflect.Bool:
 		var b bool
 		if b, err = strconv.ParseBool(val); err == nil {
-			if err = validate.Field(b, param.Validate); err != nil {
-				return err
-			}
 			v.SetBool(b)
 			return nil
 		}
@@ -246,7 +256,7 @@ func getSlice(p *Properties, et reflect.Type, param BindParam) (*Properties, err
 			strVal = p.Get(param.Key)
 		} else {
 			if !param.Tag.HasDef {
-				return nil, util.Errorf(code.FileLine(), "property %q %w", param.Key, errNotExist)
+				return nil, util.Wrapf(errNotExist, code.FileLine(), "property %q", param.Key)
 			}
 			if param.Tag.Def == "" {
 				return nil, nil
@@ -268,18 +278,21 @@ func getSlice(p *Properties, et reflect.Type, param BindParam) (*Properties, err
 
 	if s := param.Tag.Splitter; s == "" {
 		arrVal = strings.Split(strVal, ",")
+		for i := range arrVal {
+			arrVal[i] = strings.TrimSpace(arrVal[i])
+		}
 	} else if fn := splitters[s]; fn != nil {
 		if arrVal, err = fn(strVal); err != nil {
-			return nil, err
+			return nil, util.Wrapf(err, code.FileLine(), "split error")
 		}
+	} else {
+		return nil, util.Errorf(code.FileLine(), "error splitter '%s'", s)
 	}
 
 	p = New()
 	for i, s := range arrVal {
 		k := fmt.Sprintf("%s[%d]", param.Key, i)
-		if err = p.Set(k, s); err != nil {
-			return nil, err
-		}
+		_ = p.store(k, s)
 	}
 	return p, nil
 }
@@ -334,9 +347,6 @@ func bindStruct(p *Properties, v reflect.Value, t reflect.Type, param BindParam,
 
 		if !fv.CanInterface() {
 			fv = util.PatchValue(fv)
-			if !fv.CanInterface() {
-				continue
-			}
 		}
 
 		subParam := BindParam{
@@ -441,10 +451,7 @@ func resolveString(p *Properties, s string) (string, error) {
 	}
 
 	var param BindParam
-	err := param.BindTag(s[start:end+1], "")
-	if err != nil {
-		return "", util.Wrapf(err, code.FileLine(), "resolve string %q error", s)
-	}
+	_ = param.BindTag(s[start:end+1], "")
 
 	s1, err := resolve(p, param)
 	if err != nil {

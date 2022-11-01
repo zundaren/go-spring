@@ -14,27 +14,31 @@
  * limitations under the License.
  */
 
-package redis_test
+package util_test
 
 import (
-	"context"
+	"io"
 	"testing"
 
 	"github.com/go-spring/spring-base/assert"
-	"github.com/go-spring/spring-core/redis"
-	"github.com/golang/mock/gomock"
+	"github.com/go-spring/spring-base/util"
 )
 
-func TestMock(t *testing.T) {
-
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	ctx := context.Background()
-	conn := redis.NewMockDriver(ctrl)
-	conn.EXPECT().Exec(ctx, []interface{}{"EXISTS", "mykey"}).Return(int64(0), nil)
-
-	c := redis.NewClient(conn)
-	r1, _ := c.Exists(ctx, "mykey")
-	assert.Equal(t, r1, int64(0))
+func TestFuncReader(t *testing.T) {
+	loop := 0
+	data, err := io.ReadAll(util.FuncReader(func(p []byte) (n int, err error) {
+		if loop == 0 {
+			n = copy(p, "I'm from China.")
+			loop++
+			return
+		} else if loop == 1 {
+			n = copy(p, " I love my country.")
+			loop++
+			return
+		} else {
+			return 0, io.EOF
+		}
+	}))
+	assert.Nil(t, err)
+	assert.Equal(t, string(data), "I'm from China. I love my country.")
 }

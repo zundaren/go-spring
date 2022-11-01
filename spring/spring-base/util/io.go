@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
-package web
+package util
 
-func NewRewriteFilter() *Prefilter {
-	return FuncPrefilter(func(ctx Context, chain FilterChain) {
-		// https://github.com/labstack/echo/blob/master/middleware/rewrite.go
-	})
+// FuncReader implements io.Reader by a function.
+type FuncReader func(p []byte) (n int, err error)
+
+// Read reads up to len(p) bytes into p.
+func (f FuncReader) Read(p []byte) (n int, err error) {
+	return f(p)
 }

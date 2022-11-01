@@ -18,8 +18,8 @@ package internal
 
 import (
 	"fmt"
-	"sort"
-	"strings"
+
+	"github.com/go-spring/spring-base/util"
 )
 
 type nodeType int
@@ -93,15 +93,7 @@ func (s *Storage) Data() map[string]string {
 
 // Keys returns keys of the properties.
 func (s *Storage) Keys() []string {
-	if len(s.data) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(s.data))
-	for k := range s.data {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	return util.SortedKeys(s.data)
 }
 
 // SubKeys returns the sub keys of the key item.
@@ -124,11 +116,8 @@ func (s *Storage) SubKeys(key string) ([]string, error) {
 			tree = v
 		}
 	}
-	var keys []string
-	for k := range tree.data.(map[string]*treeNode) {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	m := tree.data.(map[string]*treeNode)
+	keys := util.SortedKeys(m)
 	return keys, nil
 }
 
@@ -161,39 +150,37 @@ func (s *Storage) Get(key string) string {
 
 // Set stores the key and its value.
 func (s *Storage) Set(key, val string) error {
-	val = strings.TrimSpace(val)
-	err := s.buildTree(key, val)
+	tree, err := s.merge(key, val)
 	if err != nil {
 		return err
 	}
-	path, _ := SplitPath(key)
-	for i := range path {
-		k := JoinPath(path[:i+1])
-		if _, ok := s.data[k]; ok {
-			delete(s.data, k)
-		}
+	switch tree.node {
+	case nodeTypeNil, nodeTypeValue:
+		s.data[key] = val
 	}
-	s.data[key] = val
 	return nil
 }
 
-func (s *Storage) buildTree(key, val string) error {
+func (s *Storage) merge(key, val string) (*treeNode, error) {
 	path, err := SplitPath(key)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if path[0].Type == PathTypeIndex {
-		return fmt.Errorf("invalid key '%s'", key)
+		return nil, fmt.Errorf("invalid key '%s'", key)
 	}
 	tree := s.tree
 	for i, pathNode := range path {
 		if tree.node == nodeTypeMap {
 			if pathNode.Type != PathTypeKey {
-				return fmt.Errorf("property '%s' is a map but '%s' wants other type", JoinPath(path[:i]), key)
+				return nil, fmt.Errorf("property '%s' is a map but '%s' wants other type", JoinPath(path[:i]), key)
 			}
 		}
 		m := tree.data.(map[string]*treeNode)
 		v, ok := m[pathNode.Elem]
+		if v != nil && v.node == nodeTypeNil {
+			delete(s.data, JoinPath(path[:i+1]))
+		}
 		if !ok || v.node == nodeTypeNil {
 			if i < len(path)-1 {
 				n := &treeNode{
@@ -213,17 +200,12 @@ func (s *Storage) buildTree(key, val string) error {
 				continue
 			}
 			if val == "" {
-				m[pathNode.Elem] = &treeNode{
-					node: nodeTypeNil,
-					data: nodeTypeNil,
-				}
-				continue
+				tree = &treeNode{node: nodeTypeNil}
+			} else {
+				tree = &treeNode{node: nodeTypeValue}
 			}
-			m[pathNode.Elem] = &treeNode{
-				node: nodeTypeValue,
-				data: nodeTypeValue,
-			}
-			continue
+			m[pathNode.Elem] = tree
+			break // break for 100% test
 		}
 		switch v.node {
 		case nodeTypeMap:
@@ -232,15 +214,13 @@ func (s *Storage) buildTree(key, val string) error {
 				continue
 			}
 			if val == "" {
-				s.remove(key, v)
-				v.data = make(map[string]*treeNode)
-				return nil
+				return v, nil
 			}
-			return fmt.Errorf("property '%s' is a map but '%s' wants other type", JoinPath(path[:i+1]), key)
+			return nil, fmt.Errorf("property '%s' is a map but '%s' wants other type", JoinPath(path[:i+1]), key)
 		case nodeTypeArray:
 			if pathNode.Type != PathTypeIndex {
 				if i < len(path)-1 && path[i+1].Type != PathTypeIndex {
-					return fmt.Errorf("property '%s' is an array but '%s' wants other type", JoinPath(path[:i+1]), key)
+					return nil, fmt.Errorf("property '%s' is an array but '%s' wants other type", JoinPath(path[:i+1]), key)
 				}
 			}
 			if i < len(path)-1 {
@@ -248,37 +228,15 @@ func (s *Storage) buildTree(key, val string) error {
 				continue
 			}
 			if val == "" {
-				s.remove(key, v)
-				v.data = make(map[string]*treeNode)
-				return nil
+				return v, nil
 			}
-			return fmt.Errorf("property '%s' is an array but '%s' wants other type", JoinPath(path[:i+1]), key)
+			return nil, fmt.Errorf("property '%s' is an array but '%s' wants other type", JoinPath(path[:i+1]), key)
 		case nodeTypeValue:
 			if i == len(path)-1 {
-				if val == "" {
-					s.remove(key, v)
-				}
-				return nil
+				return v, nil
 			}
-			return fmt.Errorf("property '%s' is a value but '%s' wants other type", JoinPath(path[:i+1]), key)
+			return nil, fmt.Errorf("property '%s' is a value but '%s' wants other type", JoinPath(path[:i+1]), key)
 		}
 	}
-	return nil
-}
-
-func (s *Storage) remove(key string, tree *treeNode) {
-	switch tree.node {
-	case nodeTypeValue:
-		delete(s.data, key)
-	case nodeTypeMap:
-		m := tree.data.(map[string]*treeNode)
-		for k, v := range m {
-			s.remove(key+"."+k, v)
-		}
-	case nodeTypeArray:
-		m := tree.data.(map[string]*treeNode)
-		for k, v := range m {
-			s.remove(key+"["+k+"]", v)
-		}
-	}
+	return tree, nil
 }
