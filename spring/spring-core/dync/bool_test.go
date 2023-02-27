@@ -14,38 +14,39 @@
  * limitations under the License.
  */
 
-package dync
+package dync_test
 
 import (
-	"encoding/json"
+	"testing"
 
-	"github.com/go-spring/spring-base/atomic"
+	"github.com/go-spring/spring-base/assert"
+	"github.com/go-spring/spring-base/json"
 	"github.com/go-spring/spring-core/conf"
+	"github.com/go-spring/spring-core/dync"
 )
 
-var _ Value = (*Uint32)(nil)
+func TestBool(t *testing.T) {
 
-// An Uint32 is an atomic uint32 value that can be dynamic refreshed.
-type Uint32 struct {
-	v atomic.Uint32
-}
+	var u dync.Bool
+	assert.Equal(t, u.Value(), false)
 
-// Value returns the stored uint32 value.
-func (x *Uint32) Value() uint32 {
-	return x.v.Load()
-}
-
-// OnRefresh refreshes the stored value.
-func (x *Uint32) OnRefresh(p *conf.Properties, param conf.BindParam) error {
-	var u uint32
-	if err := p.Bind(&u, conf.Param(param)); err != nil {
-		return err
+	param := conf.BindParam{
+		Key:  "bool",
+		Path: "bool",
+		Tag: conf.ParsedTag{
+			Key: "bool",
+		},
 	}
-	x.v.Store(u)
-	return nil
-}
 
-// MarshalJSON returns the JSON encoding of x.
-func (x *Uint32) MarshalJSON() ([]byte, error) {
-	return json.Marshal(x.Value())
+	p := conf.Map(nil)
+	err := u.OnRefresh(p, param)
+	assert.Error(t, err, "bind bool error; .* resolve property \"bool\" error; property \"bool\" not exist")
+
+	_ = p.Set("bool", true)
+	err = u.OnRefresh(p, param)
+	assert.Equal(t, u.Value(), true)
+
+	b, err := json.Marshal(&u)
+	assert.Nil(t, err)
+	assert.Equal(t, string(b), "true")
 }

@@ -23,27 +23,38 @@ import (
 	"github.com/go-spring/spring-core/validate"
 )
 
-func TestTagName(t *testing.T) {
-	assert.Equal(t, validate.TagName(), "expr")
+var empty = &emptyValidator{}
+
+func init() {
+	validate.Register("empty", empty)
 }
 
-func TestStruct(t *testing.T) {
-	var s struct {
-		E string `expr:"len($)>3"`
-	}
-	err := validate.Struct(&s)
-	assert.Nil(t, err)
+type emptyValidator struct {
+	count int
+}
+
+func (d *emptyValidator) reset() {
+	d.count = 0
+}
+
+func (d *emptyValidator) Field(tag string, i interface{}) error {
+	d.count++
+	return nil
 }
 
 func TestField(t *testing.T) {
-	i := 2
-	err := validate.Field(i, "")
+	i := 6
+
+	err := validate.Field("empty:\"\"", i)
 	assert.Nil(t, err)
-	err = validate.Field(i, "len($)==5")
-	assert.Error(t, err, "returns error")
-	err = validate.Field(i, "$>=3")
-	assert.Error(t, err, "validate failed on \"\\$>=3\" for value 2")
-	i = 5
-	err = validate.Field(i, "$>=3")
+	assert.Equal(t, empty.count, 1)
+
+	err = validate.Field("expr:\"$>=3\"", i)
 	assert.Nil(t, err)
+
+	err = validate.Field("expr:\"$<3\"", i)
+	assert.Error(t, err, "validate failed on \"\\$<3\" for value 6")
+
+	err = validate.Field("expr:\"$<3\"", "abc")
+	assert.Error(t, err, "invalid operation\\: string \\< int \\(1:2\\)")
 }

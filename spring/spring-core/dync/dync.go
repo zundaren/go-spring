@@ -17,32 +17,33 @@
 package dync
 
 import (
-	"fmt"
 	"reflect"
 	"sort"
 	"strings"
 
 	"github.com/go-spring/spring-base/atomic"
+	"github.com/go-spring/spring-base/util"
 	"github.com/go-spring/spring-core/conf"
 )
 
-// Value 可动态刷新的对象
+// A Value represents a refreshable type.
 type Value interface {
-	Refresh(prop *conf.Properties, param conf.BindParam) error
-	Validate(prop *conf.Properties, param conf.BindParam) error
+	OnRefresh(p *conf.Properties, param conf.BindParam) error
 }
 
+// A Field represents a refreshable struct field.
 type Field struct {
 	value Value
 	param conf.BindParam
 }
 
-// Properties 动态属性
+// Properties refreshes registered fields dynamically and concurrently.
 type Properties struct {
 	value  atomic.Value
 	fields []*Field
 }
 
+// New returns a Properties.
 func New() *Properties {
 	p := &Properties{}
 	p.value.Store(conf.New())
@@ -53,65 +54,53 @@ func (p *Properties) load() *conf.Properties {
 	return p.value.Load().(*conf.Properties)
 }
 
+// Keys returns all sorted keys.
 func (p *Properties) Keys() []string {
 	return p.load().Keys()
 }
 
+// Has returns whether key exists.
 func (p *Properties) Has(key string) bool {
 	return p.load().Has(key)
 }
 
+// Get returns key's value.
 func (p *Properties) Get(key string, opts ...conf.GetOption) string {
 	return p.load().Get(key, opts...)
 }
 
+// Resolve resolves string value.
 func (p *Properties) Resolve(s string) (string, error) {
 	return p.load().Resolve(s)
 }
 
-func (p *Properties) Bind(i interface{}, opts ...conf.BindOption) error {
-	return p.load().Bind(i, opts...)
+// Bind binds properties to a value.
+func (p *Properties) Bind(i interface{}, args ...conf.BindArg) error {
+	return p.load().Bind(i, args...)
 }
 
-func (p *Properties) Update(m map[string]interface{}) error {
-
-	flat := make(map[string]string)
-	for key, val := range m {
-		err := conf.Flatten(key, val, flat)
-		if err != nil {
-			return err
-		}
-	}
-
-	keys := make([]string, 0, len(flat))
-	for k := range flat {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	prop := p.load().Copy()
-	for _, k := range keys {
-		err := prop.Set(k, flat[k])
-		if err != nil {
-			return err
-		}
-	}
-	return p.refreshKeys(prop, keys)
-}
-
+// Refresh refreshes new Properties atomically.
 func (p *Properties) Refresh(prop *conf.Properties) (err error) {
 
 	old := p.load()
+	p.value.Store(prop)
+
+	if len(p.fields) == 0 {
+		return nil
+	}
+
 	oldKeys := old.Keys()
 	newKeys := prop.Keys()
 
 	changes := make(map[string]struct{})
 	{
+		// property value has changed.
 		for _, k := range newKeys {
 			if !old.Has(k) || old.Get(k) != prop.Get(k) {
 				changes[k] = struct{}{}
 			}
 		}
+		// property key has deleted.
 		for _, k := range oldKeys {
 			if _, ok := changes[k]; !ok {
 				changes[k] = struct{}{}
@@ -119,11 +108,7 @@ func (p *Properties) Refresh(prop *conf.Properties) (err error) {
 		}
 	}
 
-	keys := make([]string, 0, len(changes))
-	for k := range changes {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := util.SortedKeys(changes)
 	return p.refreshKeys(prop, keys)
 }
 
@@ -159,31 +144,9 @@ func (p *Properties) refreshKeys(prop *conf.Properties, keys []string) (err erro
 	return p.refreshFields(prop, updateFields)
 }
 
-func (p *Properties) refreshFields(prop *conf.Properties, fields []*Field) (err error) {
-
-	err = validateFields(prop, fields)
-	if err != nil {
-		return
-	}
-
-	old := p.load()
-	defer func() {
-		if r := recover(); err != nil || r != nil {
-			if err == nil {
-				err = fmt.Errorf("%v", r)
-			}
-			p.value.Store(old)
-			_ = refreshFields(old, fields)
-		}
-	}()
-
-	p.value.Store(prop)
-	return refreshFields(p.load(), fields)
-}
-
-func validateFields(prop *conf.Properties, fields []*Field) error {
+func (p *Properties) refreshFields(prop *conf.Properties, fields []*Field) error {
 	for _, f := range fields {
-		err := f.value.Validate(prop, f.param)
+		err := f.value.OnRefresh(prop, f.param)
 		if err != nil {
 			return err
 		}
@@ -191,16 +154,7 @@ func validateFields(prop *conf.Properties, fields []*Field) error {
 	return nil
 }
 
-func refreshFields(prop *conf.Properties, fields []*Field) error {
-	for _, f := range fields {
-		err := f.value.Refresh(prop, f.param)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
+// BindValue binds properties to a value.
 func (p *Properties) BindValue(v reflect.Value, param conf.BindParam) error {
 	if v.Kind() == reflect.Ptr {
 		ok, err := p.bindValue(v.Interface(), param)
@@ -221,12 +175,7 @@ func (p *Properties) bindValue(i interface{}, param conf.BindParam) (bool, error
 		return false, nil
 	}
 
-	prop := p.load()
-	err := v.Validate(prop, param)
-	if err != nil {
-		return false, err
-	}
-	err = v.Refresh(prop, param)
+	err := v.OnRefresh(p.load(), param)
 	if err != nil {
 		return false, err
 	}
@@ -236,13 +185,4 @@ func (p *Properties) bindValue(i interface{}, param conf.BindParam) (bool, error
 		param: param,
 	})
 	return true, nil
-}
-
-func GetProperty(prop *conf.Properties, param conf.BindParam) (string, error) {
-	key := param.Key
-	if !prop.Has(key) && !param.Tag.HasDef {
-		return "", fmt.Errorf("property %q not exist", key)
-	}
-	s := prop.Get(key, conf.Def(param.Tag.Def))
-	return s, nil
 }

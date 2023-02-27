@@ -21,57 +21,32 @@ import (
 	"time"
 
 	"github.com/go-spring/spring-base/atomic"
-	"github.com/go-spring/spring-base/cast"
 	"github.com/go-spring/spring-core/conf"
 )
 
-type DurationValidateFunc func(v time.Duration) error
+var _ Value = (*Duration)(nil)
 
+// A Duration is an atomic time.Duration value that can be dynamic refreshed.
 type Duration struct {
 	v atomic.Duration
-	f DurationValidateFunc
 }
 
+// Value returns the stored time.Duration value.
 func (x *Duration) Value() time.Duration {
 	return x.v.Load()
 }
 
-func (x *Duration) OnValidate(f DurationValidateFunc) {
-	x.f = f
-}
-
-func (x *Duration) getDuration(prop *conf.Properties, param conf.BindParam) (time.Duration, error) {
-	s, err := GetProperty(prop, param)
-	if err != nil {
-		return 0, err
-	}
-	v, err := cast.ToDurationE(s)
-	if err != nil {
-		return 0, err
-	}
-	return v, nil
-}
-
-func (x *Duration) Refresh(prop *conf.Properties, param conf.BindParam) error {
-	v, err := x.getDuration(prop, param)
-	if err != nil {
+// OnRefresh refreshes the stored value.
+func (x *Duration) OnRefresh(p *conf.Properties, param conf.BindParam) error {
+	var d time.Duration
+	if err := p.Bind(&d, conf.Param(param)); err != nil {
 		return err
 	}
-	x.v.Store(v)
+	x.v.Store(d)
 	return nil
 }
 
-func (x *Duration) Validate(prop *conf.Properties, param conf.BindParam) error {
-	v, err := x.getDuration(prop, param)
-	if err != nil {
-		return err
-	}
-	if x.f != nil {
-		return x.f(v)
-	}
-	return nil
-}
-
+// MarshalJSON returns the JSON encoding of x.
 func (x *Duration) MarshalJSON() ([]byte, error) {
 	return json.Marshal(x.Value())
 }
